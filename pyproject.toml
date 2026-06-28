@@ -4,7 +4,7 @@
 
 [project]
 name = "bidshub"
-version = "3.1.6"
+version = "3.1.7"
 description = "Multi-platform BIDS dataset management and exploration for neuroimaging"
 readme = "README.md"
 license = { file = "LICENSE" }
