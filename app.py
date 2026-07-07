@@ -230,6 +230,10 @@ def render_update_banner():
 
     Source/Docker deployments update via ``git pull``/rebuild, so the
     "download a new installer" advice only applies to the packaged app.
+
+    Offers an *assisted*, opt-in update: the "Install now" button (the user's
+    consent) downloads + checksum-verifies the installer for this OS and opens
+    it. Nothing downloads without that click.
     """
     if not getattr(sys, "frozen", False):
         return
@@ -238,13 +242,74 @@ def render_update_banner():
     info = _check_latest_release()
     if not info:
         return
-    col_msg, col_x = st.columns([0.9, 0.1])
-    with col_msg:
-        st.info(format_update_banner(info, __version__), icon="⬆️")
-    with col_x:
-        if st.button("Dismiss", key="dismiss_update_banner"):
+
+    st.info(format_update_banner(info, __version__), icon="⬆️")
+    col_install, col_later, _ = st.columns([0.28, 0.18, 0.54])
+    with col_install:
+        if st.button("Install now", key="install_update", type="primary",
+                     use_container_width=True):
+            _run_assisted_update(info)
+    with col_later:
+        if st.button("Later", key="dismiss_update_banner",
+                     use_container_width=True):
             st.session_state.update_banner_dismissed = True
             st.rerun()
+
+
+def _run_assisted_update(info: dict) -> None:
+    """Download + verify this platform's installer (with consent), then open it.
+
+    Runs synchronously during the button's rerun, streaming progress into a
+    bar. Every failure degrades to the manual download link — it never raises
+    into the app.
+    """
+    try:
+        from desktop.updates import (
+            asset_name_for_platform,
+            download_update,
+            open_installer,
+        )
+    except Exception:
+        st.error(f"Update helper unavailable. Please download the new version "
+                 f"from the [release page]({info['url']}).")
+        return
+
+    if not asset_name_for_platform():
+        st.warning("Automatic update isn't available for this platform. "
+                   f"Please download it from the [release page]({info['url']}).")
+        return
+
+    bar = st.progress(0.0, text="Downloading update…")
+
+    def _on_progress(read: int, total: int) -> None:
+        if total:
+            mb = 1 << 20
+            bar.progress(min(read / total, 1.0),
+                         text=f"Downloading update… {read // mb} / {total // mb} MB")
+
+    try:
+        result = download_update(info, progress=_on_progress)
+    except Exception as exc:  # defensive: helper is already non-raising
+        result = {"ok": False, "error": str(exc)}
+    finally:
+        bar.empty()
+
+    if not result.get("ok"):
+        st.error(f"{result.get('error', 'Update failed.')} You can still "
+                 f"[download it manually]({info['url']}).")
+        return
+
+    if open_installer(result["path"]):
+        how = "verified and opened" if result.get("verified") else "downloaded and opened"
+        st.success(
+            f"Update {how}. **Quit BIDSHub**, then complete the installation "
+            "to finish updating — your data is preserved."
+        )
+    else:
+        st.warning(
+            f"Downloaded to `{result['path']}`, but it couldn't be opened "
+            "automatically. Open that file to install."
+        )
 
 
 def main():

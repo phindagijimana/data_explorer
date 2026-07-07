@@ -56,3 +56,81 @@ def test_banner_hidden_when_no_update(monkeypatch):
 
     at = AppTest.from_function(script).run()
     assert len(at.info) == 0
+
+
+_URL = "https://github.com/phindagijimana/BIDSHub/releases/tag/v9.9.9"
+
+
+def test_banner_shows_install_button(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    def script():
+        # Inlined so it survives AppTest's isolated exec context.
+        import app
+        app._check_latest_release = lambda: {
+            "version": "v9.9.9",
+            "url": "https://github.com/phindagijimana/BIDSHub/releases/tag/v9.9.9",
+            "name": "BIDSHub 9.9.9",
+            "assets": [{"name": "BIDSHub.dmg", "browser_download_url": "http://x/dmg"}],
+        }
+        app.render_update_banner()
+
+    at = AppTest.from_function(script).run()
+    assert any(b.label == "Install now" for b in at.button), "expected an Install button"
+
+
+def test_install_now_runs_assisted_update(monkeypatch):
+    """Clicking Install downloads+verifies (stubbed) and opens the installer."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    import desktop.updates as du
+    opened = {}
+    monkeypatch.setattr(du, "asset_name_for_platform", lambda *a, **k: "BIDSHub.dmg")
+    monkeypatch.setattr(du, "download_update",
+                        lambda info, **k: {"ok": True, "path": "/tmp/BIDSHub.dmg",
+                                           "verified": True, "error": None})
+    monkeypatch.setattr(du, "open_installer",
+                        lambda path, **k: opened.setdefault("path", path) or True)
+
+    def script():
+        import app
+        app._check_latest_release = lambda: {
+            "version": "v9.9.9",
+            "url": "https://github.com/phindagijimana/BIDSHub/releases/tag/v9.9.9",
+            "name": "BIDSHub 9.9.9",
+            "assets": [{"name": "BIDSHub.dmg", "browser_download_url": "http://x/dmg"}],
+        }
+        app.render_update_banner()
+
+    at = AppTest.from_function(script).run()
+    at.button(key="install_update").click().run()
+
+    assert opened["path"] == "/tmp/BIDSHub.dmg"
+    assert any("quit bidshub" in s.value.lower() for s in at.success)
+
+
+def test_install_now_falls_back_on_failure(monkeypatch):
+    """A failed download surfaces an error with the manual download link."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    import desktop.updates as du
+    monkeypatch.setattr(du, "asset_name_for_platform", lambda *a, **k: "BIDSHub.dmg")
+    monkeypatch.setattr(du, "download_update",
+                        lambda info, **k: {"ok": False, "path": None,
+                                           "verified": False, "error": "Download failed: boom"})
+
+    def script():
+        import app
+        app._check_latest_release = lambda: {
+            "version": "v9.9.9",
+            "url": "https://github.com/phindagijimana/BIDSHub/releases/tag/v9.9.9",
+            "name": "BIDSHub 9.9.9",
+            "assets": [{"name": "BIDSHub.dmg", "browser_download_url": "http://x/dmg"}],
+        }
+        app.render_update_banner()
+
+    at = AppTest.from_function(script).run()
+    at.button(key="install_update").click().run()
+
+    assert any("download failed" in e.value.lower() for e in at.error)
+    assert any(_URL in e.value for e in at.error)
